@@ -1,0 +1,14 @@
+Metadata-Version: 2.4
+Name: chefai
+Version: 0.1.0
+Summary: Add your description here
+Requires-Python: >=3.14
+Description-Content-Type: text/markdown
+Requires-Dist: beautifulsoup4>=4.15.0
+Requires-Dist: httpx>=0.28.1
+Requires-Dist: ollama>=0.6.2
+Requires-Dist: playwright>=1.60.0
+Requires-Dist: pydantic>=2.13.4
+Requires-Dist: rapidfuzz>=3.14.5
+Requires-Dist: rich>=15.0.0
+Requires-Dist: typer>=0.26.7
