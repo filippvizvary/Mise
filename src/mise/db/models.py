@@ -1,5 +1,5 @@
 import sqlite3
-from chefai.config import DB_PATH
+from mise.config import DB_PATH
 
 
 def _get_conn():

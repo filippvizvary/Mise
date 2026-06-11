@@ -1,7 +1,7 @@
 [project]
-name = "chefai"
+name = "mise"
 version = "0.1.0"
-description = "Add your description here"
+description = "Mise – smart food discount tracker (from 'mise en place')"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
@@ -16,8 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
-chefai = "chefai.cli:app"
-chef = "chefai.cli:app"
+mise = "mise.cli:app"
 
 [build-system]
 requires = ["setuptools"]

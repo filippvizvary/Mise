@@ -1,7 +1,7 @@
 Metadata-Version: 2.4
-Name: chefai
+Name: mise
 Version: 0.1.0
-Summary: Add your description here
+Summary: Mise – smart food discount tracker (from 'mise en place')
 Requires-Python: >=3.14
 Description-Content-Type: text/markdown
 Requires-Dist: beautifulsoup4>=4.15.0

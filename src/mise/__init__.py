@@ -1,0 +1,1 @@
+"""Mise – smart food discount tracker."""

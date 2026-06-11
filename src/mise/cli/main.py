@@ -4,11 +4,11 @@ from rich.text import Text
 from rich import pretty
 from rich.panel import Panel
 from rich.table import Table
-from chefai.db.models import init_db, insert_discounts, get_discounts
+from mise.db.models import init_db, insert_discounts, get_discounts
 
 pretty.install()
 
-app = typer.Typer(help="ChefAI – smart food planner")
+app = typer.Typer(help="Mise – smart food discount tracker")
 db_app = typer.Typer(help="Database commands")
 app.add_typer(db_app, name="db")
 
