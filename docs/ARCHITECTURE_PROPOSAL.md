@@ -43,7 +43,11 @@ The system will be **multi-user** from the ground up — with login, authenticat
 │ Prefs    │ Calendar │ Scraper  │ Comparer  │ Receipt OCR       │
 │ History  │          │ Parser   │           │ Voice Input       │
 │ Feedback │          │ Units    │           │                   │
-├──────────┴──────────┴──────────┴───────────┴───────────────────┤
+├──────────┬─────────┴──────────┴───────────┴───────────────────┤
+│  mise/   │                                                   │
+│  cook    │  Cook Mode: Time-aware suggestions, recipe        │
+│          │  scaling, preference overlay, step-by-step        │
+├──────────┴────────────────────────────────────────────────────┤
 │  mise/budget    │    mise/input    │    mise/units              │
 │  (tracker)     │    (voice/ocr)   │    (converter)              │
 ├────────────────────────────────────────────────────────────────┤
@@ -552,6 +556,162 @@ WHISPER_LANGUAGE = "en"  # transcription language
 
 # OCR
 OCR_ENGINE = "tesseract"  # or "cloud" for cloud-based OCR
+
+# Cook Mode — time-aware meal slot detection
+MEAL_SLOT_BREAKFAST = (6, 9)     # 6am–9am → breakfast
+MEAL_SLOT_LUNCH = (11, 14)       # 11am–2pm → lunch
+MEAL_SLOT_DINNER = (17, 21)      # 5pm–9pm → dinner
+
+# Cook Mode — scaling
+SCALING_ROUND_UP_ITEMS = ["egg", "eggs", "whole chicken", "bay leaf"]  # items that can't be fractioned
+```
+
+### 3.10 `mise/cook` — Cook Mode 🍳
+
+The cook module is Mise's **hands-free cooking assistant**. It's the difference between "viewing a recipe" and "actually cooking it." When you run `mise cook`, it figures out what you probably want to cook right now, scales the recipe to your needs, warns you about family member allergies, and walks you through the steps one at a time.
+
+#### Time-Aware Recipe Suggestion
+
+When `mise cook` is invoked with no arguments, it uses the current time to determine the appropriate meal slot:
+
+| Time Range | Meal Slot |
+|---|---|
+| 6:00 – 9:00 | Breakfast |
+| 11:00 – 14:00 | Lunch |
+| 17:00 – 21:00 | Dinner |
+| Otherwise | Snack / No suggestion |
+
+It then looks up today's `MealPlan` for that slot:
+- **Found**: "You have 🍝 Pasta Carbonara planned for tonight. Cook it? \[Y/n/search\]"
+- **Not found**: "No dinner planned for tonight. \[Search recipe / Browse suggestions / Recent recipes / Unplanned cook\]"
+
+This ensures you don't get tomorrow's lunch suggestion when it's evening — you get what's relevant **right now**.
+
+#### Portion Scaling
+
+Recipes are stored at their original serving count (e.g., a recipe for 4). When entering cook mode, the user is asked:
+
+```
+How many portions? [2] (default: your household size)
+```
+
+**Default scaling — pure arithmetic (instant, free):**
+
+Scale factor = `requested_portions / recipe.servings`
+
+All ingredient quantities are multiplied by this factor. This handles 95%+ of cases correctly:
+- 4-serving recipe → 2 portions: halve everything (200g flour → 100g, 2 eggs → 1 egg)
+- 4-serving recipe → 6 portions: multiply by 1.5
+
+**Edge cases handled in arithmetic scaling:**
+- Ingredient quantities that result in awkward fractions (e.g., 0.75 eggs) are **rounded up** to practical amounts with a note: "1 egg (original: 0.75, rounded up)"
+- Items that don't scale (e.g., "1 whole chicken") keep the original item but adjust the note: "1 whole chicken (original recipe serves 4, you're making 2 portions — consider a smaller chicken)"
+
+**Smart scaling — opt-in (`--smart-scale` flag):**
+
+When `--smart-scale` is used, AI adjusts non-linear ingredients and cooking parameters:
+- Salt, spices, and leavening agents scale non-linearly (don't double the salt when doubling a recipe)
+- Cook times change with quantity (a bigger batch takes longer)
+- Pan/equipment sizes may need adjustment
+- Temperature might need slight tweaks
+
+This is triggered only by the `--smart-scale` flag because it costs an AI round-trip and is unnecessary for simple scaling.
+
+#### Family Preference Overlay
+
+When a recipe is selected in cook mode, the system checks ingredients against family member preferences/restrictions from the user profile.
+
+**Default — warning overlay (no AI, instant):**
+
+```
+⚠️ Allergen Alerts:
+   • Alice is allergic to peanuts (this recipe contains peanut butter)
+   • Carol is gluten-intolerant (this recipe uses wheat flour)
+
+💡 Preference Notes:
+   • Bob prefers spicy food — consider adding chili flakes
+```
+
+The recipe is **not modified** — warnings and notes are displayed alongside the original ingredients. The cook decides what to do.
+
+**AI-adjusted substitutions — opt-in (`--ai-adjust` flag):**
+
+When `--ai-adjust` is used, AI suggests specific substitutions for each family member's restrictions:
+- "Substitute peanut butter with sunflower butter (for Alice's peanut allergy)"
+- "Use gluten-free flour blend instead of wheat flour (for Carol's gluten intolerance)"
+
+This is opt-in because it costs an AI call and most cooks just need a heads-up, not a rewritten recipe.
+
+#### Step-by-Step Cooking Mode
+
+Once the recipe is selected, portions confirmed, and scaling applied, the user enters **interactive cooking mode**:
+
+```
+╔══════════════════════════════════════════════╗
+║  🍝 Pasta Carbonara                          ║
+║  2 portions · 30 min · easy                  ║
+║  Scaled from 4 servings (factor: 0.5)       ║
+╠══════════════════════════════════════════════╣
+║                                              ║
+║  Ingredients:                                ║
+║    • 100g spaghetti                          ║
+║    • 2 egg yolks                             ║
+║    • 50g pancetta                            ║
+║    • 25g parmesan                            ║
+║                                              ║
+║  ⚠️ Alice: allergic to eggs (contains yolks) ║
+║  💡 Bob: would enjoy extra pepper            ║
+║                                              ║
+║  ─────────────────────────────────────────── ║
+║                                              ║
+║  Step 1 of 6:                               ║
+║  Cook spaghetti in salted boiling water      ║
+║  until al dente (8-10 min).                  ║
+║                                              ║
+║  [Next] [Prev] [Ingredients] [Quit]         ║
+╚══════════════════════════════════════════════╝
+```
+
+This is the **"flour-on-hands" friendly mode** — minimal interaction needed:
+- **Next / Prev**: Navigate steps
+- **Ingredients**: Jump to ingredient list
+- **Quit**: Exit cooking mode
+
+On exit, the system asks:
+```
+Rate this meal? [1-5/skip]: 4
+✓ Rated 4/5. Meal plan status updated to 'cooked'.
+```
+
+This rating feeds into the feedback/learning system (Section 9).
+
+#### Preview Mode
+
+`mise recipe show <id>` lets you **preview** a recipe without entering cook mode. It shows the full recipe at original servings. To preview a scaled version without step-by-step:
+
+```
+mise cook --recipe pasta-carbonara --portions 2 --preview
+```
+
+This displays the scaled ingredient list and recipe details but does **not** enter interactive step-by-step mode.
+
+#### Recipe vs. Cook — Clear Separation
+
+| Command | Purpose | Interactive? | Scaling? |
+|---|---|---|---|
+| `mise recipe show <id>` | View a recipe as-is | No | No (original servings) |
+| `mise cook` | Interactive cooking | Yes, step-by-step | Yes |
+| `mise cook --preview` | Preview scaled recipe | No | Yes |
+
+**CLI commands envisioned:**
+```
+mise cook                                # Time-aware: suggest current meal from plan
+mise cook --recipe <id>                  # Cook a specific recipe
+mise cook --search "pasta"               # Search for a recipe to cook
+mise cook --portions 2                   # Override portions (default: household size)
+mise cook --smart-scale                  # Use AI for non-linear scaling adjustments
+mise cook --ai-adjust                    # Use AI for family preference substitutions
+mise cook --preview                      # Preview scaled recipe without step-by-step
 ```
 
 ---
@@ -714,6 +874,21 @@ CREATE TABLE IF NOT EXISTS budget_entries (
     created_at TEXT DEFAULT (datetime('now'))
 );
 
+-- ─── Cooking Sessions (Phase 6+ — future enhancement) ──────
+CREATE TABLE IF NOT EXISTS cooking_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    recipe_id TEXT NOT NULL REFERENCES recipes(id),
+    cooked_date TEXT NOT NULL,          -- ISO date when cooked
+    portions INTEGER,                    -- how many portions made
+    scale_factor REAL,                   -- e.g. 0.5 for halving a 4-serving recipe to 2
+    smart_scaled INTEGER DEFAULT 0,      -- whether AI smart-scaling was used
+    ai_adjusted INTEGER DEFAULT 0,      -- whether AI preference adjustments were used
+    rating INTEGER CHECK (rating BETWEEN 1 AND 5),  -- post-cooking rating
+    notes TEXT,                          -- free-text notes from cooking
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
 -- ─── Discounts (already exists, keep as-is) ────────────────
 -- Only discount data is available from Slovak stores.
 -- Regular prices are NOT scraped because stores don't publish them.
@@ -843,6 +1018,73 @@ Current discounts: {discounts}
 Preferred stores: {preferred}
 ```
 
+### 5.10 Smart Scaling Prompt (opt-in, `--smart-scale`)
+
+Used when the user requests AI-assisted recipe scaling. This adjusts ingredients that don't scale linearly (salt, spices, leavening) and updates cook times/temperatures for different batch sizes.
+
+```
+System: You are a recipe scaling expert. Given a recipe's original ingredients
+and a target scale factor, adjust the quantities intelligently. Not all 
+ingredients scale linearly — salt, spices, and leavening agents should scale
+sub-linearly (e.g., doubling a recipe doesn't require double the salt). Also
+adjust cook time and temperature if the batch size change warrants it.
+
+Rules:
+- Scale linear ingredients (flour, sugar, butter, liquids) by the factor
+- Scale salt by factor^0.7 (sub-linear)
+- Scale spices by factor^0.75 (sub-linear)
+- Scale leavening (baking soda/powder, yeast) by factor^0.8
+- Adjust cook time: larger batches may need more time, smaller batches less
+- Round fractional eggs/whole items up to practical amounts
+- If equipment changes are needed (different pan size), note them
+- Return BOTH original and scaled quantities for each ingredient
+
+Return JSON with: scaled_ingredients (name, original_qty, scaled_qty, unit, notes),
+adjusted_cook_time, adjusted_cook_temp, equipment_notes.
+
+User: Scale the following recipe from {original_servings} to {target_portions} servings:
+
+Original ingredients:
+{ingredients}
+
+Original cook time: {cook_time} minutes
+Original cook temp: {cook_temp}
+Original equipment: {equipment}
+```
+
+### 5.11 Preference Adjustment Prompt (opt-in, `--ai-adjust`)
+
+Used when the user requests AI-assisted family preference adjustments. This suggests ingredient substitutions based on allergies, dietary restrictions, and preferences.
+
+```
+System: You are a cooking adaptation assistant. Given a recipe's ingredient list
+and a list of family member preferences/restrictions, suggest specific 
+substitutions that accommodate everyone while keeping the dish as close to 
+the original as possible.
+
+Rules:
+- ALLERGIES are mandatory substitutions (must replace the allergen)
+- DIETARY RESTRICTIONS are mandatory (e.g., vegetarian → replace meat)
+- DISLIKES are optional suggestions (e.g., "Bob dislikes mushrooms" → 
+  suggest an alternative but note it's preference, not medical)
+- PREFERENCES are enhancement suggestions (e.g., "Alice likes spicy" → 
+  suggest adding chili)
+- Keep substitutions practical and commonly available
+- Prefer minimal changes — don't rewrite the entire recipe
+- Return BOTH original and suggested ingredient for each substitution
+
+Return JSON with: substitutions (original, substituted, reason, member_name, 
+priority: "mandatory"|"suggested"), additions (ingredient, reason, member_name).
+
+User: Adjust this recipe for the following family members:
+
+Recipe ingredients:
+{ingredients}
+
+Family member preferences/restrictions:
+{family_preferences}
+```
+
 ---
 
 ## 6. CLI Command Structure (Proposed)
@@ -897,6 +1139,14 @@ mise
 │   └── set-units metric            # Set preferred units
 ├── units                           # Unit conversion
 │   └── convert 500g oz             # Convert units
+├── cook                             # 🍳 Interactive cooking mode
+│   ├── (no args)                    # Time-aware: suggest current meal from plan
+│   ├── --recipe <id>                # Cook a specific recipe
+│   ├── --search "pasta"            # Search for a recipe to cook
+│   ├── --portions 2                 # Override portions (default: household size)
+│   ├── --smart-scale                # Use AI for non-linear scaling adjustments
+│   ├── --ai-adjust                  # Use AI for family preference substitutions
+│   └── --preview                    # Preview scaled recipe without step-by-step
 ├── feedback                        # Meal feedback
 │   ├── rate <recipe_id> 4          # Rate a meal
 │   ├── note <recipe_id> "..."      # Add notes
@@ -1015,6 +1265,41 @@ $ mise recipe import-url "https://www.varecha.sk/recept/lasagne-bolognese/"
 
 Save this recipe? [Y/n/e=edit]: y
 ✓ Recipe saved as "lasagne-bolognese"
+```
+
+### 7.4 Cook Mode Flow
+
+```
+mise cook
+    │
+    ├─ Get current time → determine meal slot
+    │   ├─ Morning (6-9am) → breakfast
+    │   ├─ Midday (11am-2pm) → lunch
+    │   └─ Evening (5-9pm) → dinner
+    │
+    ├─ Lookup MealPlan for today + meal slot
+    │   ├─ Found → "You have 🍝 Pasta Carbonara planned. Cook it? [Y/n/search]"
+    │   └─ Not found → Offer: search / browse suggestions / recent recipes / unplanned cook
+    │
+    ├─ Recipe selected
+    │
+    ├─ "How many portions? [2]" (default = household size from profile)
+    │
+    ├─ Scale recipe (factor = portions / original_servings)
+    │   ├─ Default: pure arithmetic — multiply all quantities (instant, free)
+    │   └─ --smart-scale: AI adjusts salt, spices, cook times, pan sizes
+    │
+    ├─ Check family preferences against ingredients
+    │   ├─ Default: show ⚠️ allergen alerts and 💡 preference notes (no AI needed)
+    │   └─ --ai-adjust: AI suggests substitutions per family member
+    │
+    ├─ Show scaled ingredient list with preference notes
+    │
+    └─ Enter step-by-step cooking mode (or --preview for quick view)
+        ├─ Navigate: [Next] [Prev] [Ingredients] [Quit]
+        └─ On exit: "Rate this meal? [1-5/skip]"
+            └─ Updates MealPlan status to 'cooked'
+            └─ Saves CookingSession record (Phase 6+)
 ```
 
 ---
@@ -1199,11 +1484,15 @@ Let users create templates like:
 - "Sunday dinner: something fancy, can take 2 hours"
 - "Post-workout: high protein"
 
-### 11.7 **Shared Household** 👨‍👩‍👧‍👦
+### 11.7 **Shared Household & Cook Mode** 👨‍👩‍👧‍👦🍳
 
-Even as a single DB, support `household_size > 1`:
-- Scale recipes automatically (4-serving recipe for 2 people = halve ingredients)
-- Consider different preferences per family member
+Covered in detail in Section 3.10. Key features:
+- Scale recipes automatically (4-serving recipe for 2 people = halve ingredients) via `mise cook`
+- Arithmetic scaling by default (instant, free); smart scaling via `--smart-scale` (AI, opt-in)
+- Consider different preferences per family member with allergen warnings and `--ai-adjust` substitutions
+- Time-aware recipe suggestion based on current time and meal plan
+- Step-by-step cooking mode for hands-free kitchen use
+- Cooking sessions tracked for "recently cooked" suggestions (Phase 6+)
 
 ### 11.8 **Import/Export** 📤📥
 
@@ -1233,10 +1522,12 @@ Since the user is in Slovakia (store URLs are `.sk`):
 
 ### 11.11 **Recipe Scaling** 📐
 
-When `household_size != recipe.servings`:
-- Automatically scale all ingredient quantities
-- Handle edge cases (can't scale "1 egg" to "0.75 eggs" — round up)
-- Show both original and scaled quantities
+Covered in detail in Section 3.10 (Cook Mode — Portion Scaling). Key design decisions:
+- **No pre-compute at import time** — recipes are stored at original servings; scaling is done on-demand in cook mode
+- **Arithmetic scaling by default** — `factor = requested_portions / recipe.servings`, all quantities multiplied
+- **Edge cases handled** — fractional eggs rounded up, non-scalable items flagged with notes
+- **Smart scaling opt-in** — `--smart-scale` flag triggers AI for non-linear ingredients (salt, spices, leavening) and cook time/temperature adjustments
+- **Show both original and scaled quantities** when in cook mode
 
 ### 11.12 **Price History & Alerts** 📈
 
@@ -1300,11 +1591,12 @@ Building everything at once is overwhelming. Here's a phased approach:
 - [ ] Unit conversion module (`mise/units`)
 - [ ] CLI: `mise auth register/login`, `mise profile setup`, `mise recipe import`, `mise recipe show`
 
-### Phase 3 — Meal Planning
+### Phase 3 — Meal Planning & Cook Mode
 - [ ] Meal plan model & storage (`mise/meal`)
 - [ ] AI meal suggestion prompt (incorporating preferences + discounts)
 - [ ] Meal plan calendar view
-- [ ] CLI: `mise plan week`, `mise plan day`, `mise plan show`
+- [ ] **Cook mode** (`mise/cook`) — time-aware suggestions, arithmetic recipe scaling, preference overlay, step-by-step cooking
+- [ ] CLI: `mise plan week`, `mise plan day`, `mise plan show`, `mise cook`
 
 ### Phase 4 — Shopping & Inventory
 - [ ] Shopping list model (`mise/shopping`) — discount-only price comparison
@@ -1325,7 +1617,9 @@ Building everything at once is overwhelming. Here's a phased approach:
 ### Phase 6 — Polish & Extras
 - [ ] Data export/import (JSON backup, iCal, PDF shopping lists)
 - [ ] Meal templates
-- [ ] Recipe scaling
+- [ ] Smart recipe scaling (`--smart-scale`) with AI non-linear adjustments
+- [ ] AI family preference substitutions (`--ai-adjust`)
+- [ ] Cooking session tracking (`cooking_sessions` table) — recently cooked, ratings history
 - [ ] Leftovers/batch cooking support
 - [ ] Discount history tracking & alerts
 - [ ] Seasonal awareness
@@ -1376,6 +1670,7 @@ Every data model should be a Pydantic model first, then mapped to/from DB. This 
 - `mise/meal/` — manages meal plans and calendar
 - `mise/shopping/` — manages shopping lists and discount comparison
 - `mise/inventory/` — manages pantry items and due dates
+- `mise/cook/` — cook mode: time-aware suggestions, recipe scaling, preference overlay, step-by-step cooking
 - `mise/budget/` — manages budget
 - `mise/input/` — voice transcription, receipt OCR
 - `mise/units/` — converts units
