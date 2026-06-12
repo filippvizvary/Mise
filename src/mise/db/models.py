@@ -1,3 +1,5 @@
+"""Database management for Mise."""
+
 import sqlite3
 from mise.config import DB_PATH
 
@@ -32,19 +34,43 @@ def init_db():
     conn.close()
 
 
-def insert_discounts(discounts: list):
-    """Insert a list of discount dicts into the database.
+def _normalize_discount(d):
+    """Accept a dict or a DiscountItem and return a normalized dict with all fields."""
+    # If it's a Pydantic model (DiscountItem), convert to dict
+    if hasattr(d, "model_dump"):
+        data = d.model_dump()
+    else:
+        data = dict(d)
 
-    Each dict should have keys: store, product, category, original_price, discount_price
+    # Ensure all keys exist (with None defaults for optional fields)
+    return {
+        "store": data.get("store"),
+        "product": data.get("product"),
+        "category": data.get("category"),
+        "original_price": data.get("original_price"),
+        "discount_price": data.get("discount_price"),
+        "discount_percent": data.get("discount_percent"),
+        "valid_until": data.get("valid_until"),
+        "url": data.get("url"),
+    }
+
+
+def insert_discounts(discounts: list):
+    """Insert a list of discount dicts or DiscountItems into the database.
+
+    Each item can be a dict with keys: store, product, category, original_price, discount_price
     Optional keys: discount_percent, valid_until, url
+
+    Or a :class:`mise.scraper.base.DiscountItem` instance.
     """
     conn = _get_conn()
     cursor = conn.cursor()
     for d in discounts:
+        data = _normalize_discount(d)
         cursor.execute(
-            "INSERT INTO discounts (store, product, category, original_price, discount_price) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (d["store"], d["product"], d["category"], d["original_price"], d["discount_price"]),
+            "INSERT INTO discounts (store, product, category, original_price, discount_price, discount_percent, valid_until, url) "
+            "VALUES (:store, :product, :category, :original_price, :discount_price, :discount_percent, :valid_until, :url)",
+            data,
         )
     conn.commit()
     conn.close()
