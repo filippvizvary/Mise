@@ -90,6 +90,7 @@ def register(username: str, email: str, password: str) -> RegisterResult:
             # In development mode (no SMTP), the code is printed to console
             # In production, it's sent via email
 
+        session.expunge(user)
         return RegisterResult(user=user, verification_code=verification_code)
     finally:
         session.close()
@@ -117,6 +118,7 @@ def login(username: str, password: str) -> User:
             "username": user.username,
         })
 
+        session.expunge(user)
         return user
     finally:
         session.close()
@@ -146,6 +148,7 @@ def get_current_user() -> Optional[User]:
     try:
         from mise.db.crud import get_user_by_id
         user = get_user_by_id(session, user_id)
+        session.expunge(user)
         return user
     finally:
         session.close()

@@ -21,6 +21,15 @@ dependencies = [
     "python-dotenv>=1.0",
 ]
 
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "pytest-timeout>=2.3",
+    "pytest-mock>=3.14",
+    "pytest-html>=4.1",
+]
+
 [project.scripts]
 mise = "mise.cli.main:app"
 

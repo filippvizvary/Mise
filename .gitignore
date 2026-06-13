@@ -29,3 +29,12 @@ alembic/versions/__pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# Test reports
+test_reports/
+test_workflow.db
+
+# Pytest
+.pytest_cache/
+htmlcov/
+.coverage

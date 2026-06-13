@@ -24,7 +24,7 @@ class Base(DeclarativeBase):
 
 
 engine = create_engine(DATABASE_URL, echo=False, connect_args=connect_args)
-SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
 
 
 def get_db():
