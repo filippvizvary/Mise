@@ -17,7 +17,7 @@ from mise.config import (
 
 def _smtp_configured() -> bool:
     """Check if SMTP is properly configured."""
-    return bool(SMTP_USER and SMTP_PASSWORD)
+    return bool(SMTP_USER and SMTP_PASSWORD and SMTP_HOST)
 
 
 def send_email(
@@ -57,10 +57,16 @@ def send_email(
         msg.attach(MIMEText(html_body, "html"))
 
     try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-            server.starttls()
-            server.login(SMTP_USER, SMTP_PASSWORD)
-            server.sendmail(EMAIL_FROM, to, msg.as_string())
+        # Port 465 uses implicit TLS (SMTP_SSL), other ports use STARTTLS
+        if SMTP_PORT == 465:
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT) as server:
+                server.login(SMTP_USER, SMTP_PASSWORD)
+                server.sendmail(EMAIL_FROM, to, msg.as_string())
+        else:
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+                server.starttls()
+                server.login(SMTP_USER, SMTP_PASSWORD)
+                server.sendmail(EMAIL_FROM, to, msg.as_string())
         return True
     except Exception as e:
         print(f"❌ Failed to send email to {to}: {e}")

@@ -7,7 +7,7 @@ JWT will be added when the web API is built in Phase 7).
 
 import json
 import os
-from typing import Optional
+from typing import NamedTuple, Optional
 
 import bcrypt
 
@@ -15,6 +15,12 @@ from mise.config import AUTH_FILE
 from mise.db.database import SessionLocal
 from mise.db.crud import create_user, get_user_by_username, get_user_by_email
 from mise.db.models import User
+
+
+class RegisterResult(NamedTuple):
+    """Result of a registration attempt."""
+    user: User
+    verification_code: Optional[str] = None
 
 
 def _hash_password(password: str) -> str:
@@ -29,11 +35,11 @@ def _verify_password(password: str, password_hash: str) -> bool:
 
 def _read_auth_file() -> Optional[dict]:
     """Read the auth file. Returns None if it doesn't exist or is invalid."""
-    if not os.path.exists(AUTH_FILE):
-        return None
     try:
         with open(AUTH_FILE, "r") as f:
             return json.load(f)
+    except FileNotFoundError:
+        return None
     except (json.JSONDecodeError, OSError):
         return None
 
@@ -47,14 +53,16 @@ def _write_auth_file(data: dict) -> None:
 
 def _delete_auth_file() -> None:
     """Delete the auth file (logout)."""
-    if os.path.exists(AUTH_FILE):
+    try:
         os.remove(AUTH_FILE)
+    except FileNotFoundError:
+        pass
 
 
-def register(username: str, email: str, password: str) -> User:
+def register(username: str, email: str, password: str) -> RegisterResult:
     """Register a new user.
 
-    Returns the created User object.
+    Returns a RegisterResult containing the user and optionally a verification code.
     Raises ValueError if username or email is already taken.
     If email verification is required, sends a verification code.
     """
@@ -75,14 +83,14 @@ def register(username: str, email: str, password: str) -> User:
         user = create_user(session, username=username, email=email, password_hash=password_hash)
 
         # Send verification email if required
+        verification_code = None
         from mise.email.verification import create_verification_code, is_verification_required
         if is_verification_required():
-            code = create_verification_code(user.id, user.email, user.username)
+            verification_code = create_verification_code(user.id, user.email, user.username)
             # In development mode (no SMTP), the code is printed to console
             # In production, it's sent via email
-            user._verification_code = code  # attach for CLI display
 
-        return user
+        return RegisterResult(user=user, verification_code=verification_code)
     finally:
         session.close()
 
@@ -128,10 +136,16 @@ def get_current_user() -> Optional[User]:
     if auth_data is None:
         return None
 
+    user_id = auth_data.get("user_id")
+    if user_id is None:
+        # Auth file is corrupt — remove it and require re-login
+        _delete_auth_file()
+        return None
+
     session = SessionLocal()
     try:
         from mise.db.crud import get_user_by_id
-        user = get_user_by_id(session, auth_data["user_id"])
+        user = get_user_by_id(session, user_id)
         return user
     finally:
         session.close()

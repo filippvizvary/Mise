@@ -60,6 +60,7 @@ def upgrade() -> None:
         sa.Column("weight", sa.Float(), nullable=True),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("user_id", "pref_type", "pref_value", name="uq_user_preference_type_value"),
     )
     op.create_index("ix_user_preferences_user_type", "user_preferences", ["user_id", "pref_type"])
 
@@ -262,7 +263,7 @@ def upgrade() -> None:
         sa.Column("original_price", sa.Float(), nullable=True),
         sa.Column("discount_price", sa.Float(), nullable=True),
         sa.Column("discount_percent", sa.Integer(), nullable=True),
-        sa.Column("valid_until", sa.String(length=20), nullable=True),
+        sa.Column("valid_until", sa.Date(), nullable=True),
         sa.Column("url", sa.Text(), nullable=True),
         sa.PrimaryKeyConstraint("id"),
     )

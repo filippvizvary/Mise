@@ -3,12 +3,12 @@
 Based on the schema defined in docs/ARCHITECTURE_PROPOSAL.md §4.
 """
 
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from typing import Optional
 
 from sqlalchemy import (
     Column, Integer, BigInteger, String, Text, Float, Boolean, Date, DateTime,
-    ForeignKey, UniqueConstraint, CheckConstraint, Index
+    ForeignKey, UniqueConstraint, CheckConstraint, Index,
 )
 from sqlalchemy.orm import relationship
 
@@ -25,8 +25,8 @@ class User(Base):
     email = Column(String(255), nullable=False, unique=True)
     password_hash = Column(String(255), nullable=False)
     is_verified = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     # Relationships
     profile = relationship("UserProfile", back_populates="user", uselist=False)
@@ -55,8 +55,8 @@ class UserProfile(Base):
     cooking_skill = Column(String(20), default="intermediate")  # beginner, intermediate, advanced
     max_cook_time_min = Column(Integer, nullable=True)
     language = Column(String(5), default="en")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     # Relationships
     user = relationship("User", back_populates="profile")
@@ -78,6 +78,7 @@ class UserPreference(Base):
     user = relationship("User", back_populates="preferences")
 
     __table_args__ = (
+        UniqueConstraint("user_id", "pref_type", "pref_value", name="uq_user_preference_type_value"),
         Index("ix_user_preferences_user_type", "user_id", "pref_type"),
     )
 
@@ -109,7 +110,7 @@ class Recipe(Base):
     instructions = Column(Text, nullable=True)  # JSON array of steps
     is_saved = Column(Boolean, default=True)
     auto_saved = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Relationships
     user = relationship("User", back_populates="recipes")
@@ -164,11 +165,11 @@ class MealPlan(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     date = Column(Date, nullable=False)  # ISO date
-    meal_type = Column(String(20), nullable=False)  # breakfast, lunch, dinner, brunch, snack_morning, snack_afternoon
+    meal_type = Column(String(20), nullable=False)  # breakfast, lunch, dinner, brunch, morning_snack, afternoon_snack
     recipe_id = Column(String(100), ForeignKey("recipes.id", ondelete="SET NULL"), nullable=True)
     servings = Column(Integer, nullable=True)
     status = Column(String(20), default="planned")  # planned, shopped, cooked, skipped
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Relationships
     user = relationship("User", back_populates="meal_plans")
@@ -195,7 +196,7 @@ class Feedback(Base):
     would_repeat = Column(Boolean, nullable=True)
     modifications = Column(Text, nullable=True)
     notes = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Relationships
     user = relationship("User", back_populates="feedback")
@@ -219,7 +220,7 @@ class ShoppingList(Base):
     date_range_start = Column(Date, nullable=True)
     date_range_end = Column(Date, nullable=True)
     status = Column(String(20), default="pending")  # pending, in_progress, completed
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Relationships
     user = relationship("User", back_populates="shopping_lists")
@@ -268,7 +269,7 @@ class InventoryItem(Base):
     store = Column(String(50), nullable=True)  # where bought
     price = Column(Float, nullable=True)
     source = Column(String(20), default="manual")  # manual, receipt_ocr, voice, shopping_checkoff
-    added_at = Column(DateTime, default=datetime.utcnow)
+    added_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Relationships
     user = relationship("User", back_populates="inventory")
@@ -293,7 +294,7 @@ class BudgetEntry(Base):
     total_spent = Column(Float, nullable=True)
     planned = Column(Boolean, default=False)  # was this from a mise shopping list?
     notes = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Relationships
     user = relationship("User", back_populates="budget_entries")
@@ -309,7 +310,7 @@ class CookingSession(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    recipe_id = Column(String(100), ForeignKey("recipes.id", ondelete="SET NULL"), nullable=False)
+    recipe_id = Column(String(100), ForeignKey("recipes.id", ondelete="SET NULL"), nullable=True)
     cooked_date = Column(Date, nullable=False)
     portions = Column(Integer, nullable=True)
     scale_factor = Column(Float, nullable=True)
@@ -317,7 +318,7 @@ class CookingSession(Base):
     ai_adjusted = Column(Boolean, default=False)
     rating = Column(Integer, nullable=True)  # 1-5
     notes = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Relationships
     user = relationship("User", back_populates="cooking_sessions")
@@ -341,7 +342,7 @@ class EmailVerification(Base):
     code = Column(String(8), nullable=False)  # 8-digit verification code
     email = Column(String(255), nullable=False)  # the email being verified
     is_used = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     expires_at = Column(DateTime, nullable=False)
 
     # Relationships
@@ -367,7 +368,7 @@ class Discount(Base):
     original_price = Column(Float, nullable=True)
     discount_price = Column(Float, nullable=True)
     discount_percent = Column(Integer, nullable=True)
-    valid_until = Column(String(20), nullable=True)
+    valid_until = Column(Date, nullable=True)
     url = Column(Text, nullable=True)
 
     def __repr__(self):

@@ -1,15 +1,31 @@
 """Mise configuration – paths, default settings, and environment variables."""
 
 import os
+import logging
 
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 # Load .env file if it exists (for local development)
 load_dotenv()
 
+
+def _safe_int(env_var: str, default: int) -> int:
+    """Parse an environment variable as int, returning default on failure."""
+    value = os.environ.get(env_var)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        logger.warning("Invalid integer for %s='%s', using default %d", env_var, value, default)
+        return default
+
+
 # ── Database ────────────────────────────────────────────────────────────
 # Default to SQLite for easy local dev; set DATABASE_URL for PostgreSQL
-_default_db_url = "sqlite:///" + os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "mise.db")
+_default_db_url = "sqlite:///" + os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data", "mise.db")
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
     _default_db_url,
@@ -28,7 +44,7 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
 
 # ── Scraper ─────────────────────────────────────────────────────────────
-SCRAPER_TIMEOUT = int(os.environ.get("MISE_SCRAPER_TIMEOUT", "30"))  # seconds
+SCRAPER_TIMEOUT = _safe_int("MISE_SCRAPER_TIMEOUT", 30)  # seconds
 SCRAPER_HEADLESS = os.environ.get("MISE_SCRAPER_HEADLESS", "true").lower() == "true"
 
 # ── Auth ────────────────────────────────────────────────────────────────
@@ -36,7 +52,7 @@ AUTH_FILE = os.path.join(os.path.expanduser("~"), ".mise", "auth")
 
 # ── Email ──────────────────────────────────────────────────────────────
 SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+SMTP_PORT = _safe_int("SMTP_PORT", 587)
 SMTP_USER = os.environ.get("SMTP_USER", "")
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 EMAIL_FROM = os.environ.get("EMAIL_FROM", "mise@example.com")
@@ -56,7 +72,7 @@ MEAL_SLOTS = ["breakfast", "lunch", "dinner"]
 
 # ── Price comparison (discounts only) ──────────────────────────────────
 MAX_STORE_VISITS = 3  # don't recommend visiting more than 3 stores
-PREFERRED_STORES_ORDER: list[str] = []  # user preference, empty = no preference
+PREFERRED_STORES_ORDER: tuple[str, ...] = ()  # user preference, empty = no preference
 
 # ── Cook Mode ───────────────────────────────────────────────────────────
 MEAL_SLOT_BREAKFAST = (6, 9)  # 6am–9am

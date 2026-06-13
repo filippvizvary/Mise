@@ -1,5 +1,6 @@
 """Mise CLI – command-line interface."""
 
+from datetime import datetime, timedelta
 import asyncio
 from typing import Optional
 
@@ -23,12 +24,14 @@ scrape_app = typer.Typer(help="Scraper commands")
 ai_app = typer.Typer(help="AI commands")
 auth_app = typer.Typer(help="Authentication commands")
 profile_app = typer.Typer(help="User profile & preferences")
+plan_app = typer.Typer(help="Meal planning commands")
 
 app.add_typer(db_app, name="db")
 app.add_typer(scrape_app, name="scrape")
 app.add_typer(ai_app, name="ai")
 app.add_typer(auth_app, name="auth")
 app.add_typer(profile_app, name="profile")
+app.add_typer(plan_app, name="plan")
 
 
 # ─── Helper ─────────────────────────────────────────────────────────────
@@ -159,13 +162,14 @@ def register(
 
     console = Console()
     try:
-        user = auth_register(username=username, email=email, password=password)
+        result = auth_register(username=username, email=email, password=password)
+        user = result.user
         console.print(f"[green]✓ Account created for '{user.username}'![/green]")
 
         # Show verification code info
         from mise.email.verification import is_verification_required
         if is_verification_required():
-            code = getattr(user, "_verification_code", None)
+            code = result.verification_code
             if code:
                 console.print(f"\n[yellow]📧 A verification code has been sent to {user.email}.[/yellow]")
                 console.print(f"  Run [bold]mise auth verify {code}[/bold] to verify your email.")
@@ -727,6 +731,543 @@ def ai_health(
         console.print(f"[green]✓ {p.name} is reachable![/green]")
     else:
         console.print(f"[red]✗ {p.name} is not reachable.[/red]")
+        raise typer.Exit(code=1)
+
+
+# ─── plan sub-commands ──────────────────────────────────────────────────
+
+VALID_MEAL_TYPES = ["breakfast", "lunch", "dinner", "brunch", "morning_snack", "afternoon_snack"]
+
+# Meal type emoji mapping
+MEAL_EMOJI = {
+    "breakfast": "🌅",
+    "lunch": "🌞",
+    "dinner": "🌙",
+    "brunch": "🥂",
+    "morning_snack": "🍎",
+    "afternoon_snack": "🍪",
+}
+
+
+def _plan_single_meal(meal_type: str, date_str: Optional[str] = None):
+    """Interactive meal planning for a single meal slot. Shared logic for meal-type commands."""
+    from mise.meal.planner import plan_meal, pick_suggestion
+    from mise.meal.suggestions import get_suggestions
+
+    console = Console()
+    user = _require_user()
+
+    if date_str:
+        try:
+            target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            console.print("[red]✗ Invalid date format. Use YYYY-MM-DD.[/red]")
+            raise typer.Exit(code=1)
+    else:
+        target_date = datetime.today().date() + timedelta(days=1)
+
+    emoji = MEAL_EMOJI.get(meal_type, "🍽️")
+    meal_display = meal_type.replace("_", " ").title()
+    console.print(f"\n[bold]{emoji} Planning {meal_display} for {target_date.strftime('%A, %b %d, %Y')}[/bold]\n")
+
+    try:
+        suggestions = get_suggestions(user.id, target_date, meal_type)
+    except Exception as e:
+        console.print(f"[red]✗ Error generating suggestions: {e}[/red]")
+        raise typer.Exit(code=1)
+
+    if not suggestions:
+        console.print("[yellow]No suggestions available. Check your AI provider.[/yellow]")
+        return
+
+    for i, s in enumerate(suggestions, 1):
+        detail_parts = []
+        if s.prep_time_min:
+            detail_parts.append(f"⏱️ {s.prep_time_min}min")
+        if s.difficulty:
+            detail_parts.append(f"📊 {s.difficulty}")
+        if s.cuisine:
+            detail_parts.append(f"🌍 {s.cuisine}")
+        if s.discount_match:
+            detail_parts.append(f"🏷️ {s.discount_match}")
+        detail_str = " | ".join(detail_parts)
+
+        console.print(f"  [cyan]{i}.[/cyan] [bold]{s.title}[/bold]")
+        console.print(f"      [dim]{s.reason}[/dim]")
+        if detail_str:
+            console.print(f"      {detail_str}")
+        if s.ingredient_overlap:
+            console.print(f"      [green]📦 Uses: {', '.join(s.ingredient_overlap[:5])}[/green]")
+
+    console.print("")
+    choice = Prompt.ask(
+        f"Pick a suggestion (1-{len(suggestions)}, s=surprise, k=skip)",
+        default="s",
+    )
+
+    if choice.lower() == "k":
+        console.print("[dim]Skipped.[/dim]")
+        return
+
+    if choice.lower() == "s":
+        chosen = pick_suggestion(suggestions)
+    else:
+        try:
+            idx = int(choice)
+            chosen = pick_suggestion(suggestions, idx)
+        except (ValueError, IndexError):
+            console.print("[yellow]Invalid choice, skipping.[/yellow]")
+            return
+
+    try:
+        result = plan_meal(
+            user.id,
+            target_date=target_date,
+            meal_type=meal_type,
+            recipe_id=chosen.recipe_id,
+        )
+        console.print(f"[green]✓ Planned: {chosen.title} for {meal_display} on {target_date.strftime('%b %d')}[/green]")
+    except Exception as e:
+        console.print(f"[red]✗ Error saving plan: {e}[/red]")
+
+
+# Individual meal-type commands — e.g. mise plan lunch --date 2026-06-15
+
+@plan_app.command("breakfast")
+def plan_breakfast(
+    date_str: Optional[str] = typer.Option(None, "--date", "-d", help="Date (YYYY-MM-DD), defaults to tomorrow"),
+):
+    """Plan breakfast for a specific date."""
+    _plan_single_meal("breakfast", date_str)
+
+
+@plan_app.command("lunch")
+def plan_lunch(
+    date_str: Optional[str] = typer.Option(None, "--date", "-d", help="Date (YYYY-MM-DD), defaults to tomorrow"),
+):
+    """Plan lunch for a specific date."""
+    _plan_single_meal("lunch", date_str)
+
+
+@plan_app.command("dinner")
+def plan_dinner(
+    date_str: Optional[str] = typer.Option(None, "--date", "-d", help="Date (YYYY-MM-DD), defaults to tomorrow"),
+):
+    """Plan dinner for a specific date."""
+    _plan_single_meal("dinner", date_str)
+
+
+@plan_app.command("brunch")
+def plan_brunch(
+    date_str: Optional[str] = typer.Option(None, "--date", "-d", help="Date (YYYY-MM-DD), defaults to tomorrow"),
+):
+    """Plan brunch for a specific date."""
+    _plan_single_meal("brunch", date_str)
+
+
+@plan_app.command("morning-snack")
+def plan_morning_snack(
+    date_str: Optional[str] = typer.Option(None, "--date", "-d", help="Date (YYYY-MM-DD), defaults to tomorrow"),
+):
+    """Plan a morning snack for a specific date."""
+    _plan_single_meal("morning_snack", date_str)
+
+
+@plan_app.command("afternoon-snack")
+def plan_afternoon_snack(
+    date_str: Optional[str] = typer.Option(None, "--date", "-d", help="Date (YYYY-MM-DD), defaults to tomorrow"),
+):
+    """Plan an afternoon snack for a specific date."""
+    _plan_single_meal("afternoon_snack", date_str)
+
+
+@plan_app.command("week")
+def plan_week_cmd(
+    start: Optional[str] = typer.Option(None, "--start", "-s", help="Start date (YYYY-MM-DD), defaults to tomorrow"),
+):
+    """Plan meals for the next 7 days interactively."""
+    from mise.meal.planner import plan_week, plan_meal, pick_suggestion
+
+    console = Console()
+    user = _require_user()
+
+    # Parse start date
+    if start:
+        try:
+            start_date = datetime.strptime(start, "%Y-%m-%d").date()
+        except ValueError:
+            console.print("[red]✗ Invalid date format. Use YYYY-MM-DD.[/red]")
+            raise typer.Exit(code=1)
+    else:
+        start_date = datetime.today().date() + timedelta(days=1)
+
+    console.print(f"\n[bold]📅 Planning week of {start_date.strftime('%A, %b %d')} – {(start_date + timedelta(days=6)).strftime('%A, %b %d')}[/bold]\n")
+
+    try:
+        week_suggestions = plan_week(user.id, start_date=start_date)
+    except ValueError as e:
+        console.print(f"[red]✗ {e}[/red]")
+        raise typer.Exit(code=1)
+
+    for entry in week_suggestions:
+        target_date = entry["date"]
+        meal_type = entry["meal_type"]
+        suggestions = entry["suggestions"]
+
+        emoji = MEAL_EMOJI.get(meal_type, "🍽️")
+
+        console.print(f"\n[bold]{emoji} {meal_type.replace('_', ' ').title()} — {target_date}[/bold]")
+
+        if not suggestions:
+            console.print("[yellow]  No suggestions available. Check your AI provider.[/yellow]")
+            continue
+
+        # Show suggestions
+        for i, s in enumerate(suggestions, 1):
+            detail_parts = []
+            if s.prep_time_min:
+                detail_parts.append(f"⏱️ {s.prep_time_min}min")
+            if s.difficulty:
+                detail_parts.append(f"📊 {s.difficulty}")
+            if s.cuisine:
+                detail_parts.append(f"🌍 {s.cuisine}")
+            if s.discount_match:
+                detail_parts.append(f"🏷️ {s.discount_match}")
+            detail_str = " | ".join(detail_parts)
+
+            console.print(f"  [cyan]{i}.[/cyan] [bold]{s.title}[/bold]")
+            console.print(f"      [dim]{s.reason}[/dim]")
+            if detail_str:
+                console.print(f"      {detail_str}")
+            if s.ingredient_overlap:
+                console.print(f"      [green]📦 Uses: {', '.join(s.ingredient_overlap[:5])}[/green]")
+
+        console.print("")
+        choice = Prompt.ask(
+            "Pick a suggestion (1-{n}, s=surprise, k=skip, q=quit)".format(n=len(suggestions)),
+            default="s",
+        )
+
+        if choice.lower() == "q":
+            console.print("[yellow]Planning cancelled.[/yellow]")
+            return
+        elif choice.lower() == "k":
+            console.print("[dim]Skipped.[/dim]")
+            continue
+        elif choice.lower() == "s":
+            chosen = pick_suggestion(suggestions)
+        else:
+            try:
+                idx = int(choice)
+                chosen = pick_suggestion(suggestions, idx)
+            except (ValueError, IndexError):
+                console.print("[yellow]Invalid choice, skipping.[/yellow]")
+                continue
+
+        # Save the plan
+        try:
+            result = plan_meal(
+                user.id,
+                target_date=datetime.strptime(target_date, "%Y-%m-%d").date() if isinstance(target_date, str) else target_date,
+                meal_type=meal_type,
+                recipe_id=chosen.recipe_id,
+                servings=None,
+            )
+            console.print(f"[green]✓ Planned: {chosen.title} for {meal_type} on {target_date}[/green]")
+        except Exception as e:
+            console.print(f"[red]✗ Error saving plan: {e}[/red]")
+
+    console.print("\n[bold green]✓ Week planning complete![/bold green]")
+
+
+@plan_app.command("day")
+def plan_day_cmd(
+    date_str: Optional[str] = typer.Option(None, "--date", "-d", help="Date to plan (YYYY-MM-DD), defaults to tomorrow"),
+):
+    """Plan all meals for a day interactively."""
+    from datetime import timedelta
+    from mise.meal.planner import plan_day, plan_meal, pick_suggestion
+    from mise.meal.suggestions import MealType
+
+    console = Console()
+    user = _require_user()
+
+    if date_str:
+        try:
+            target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            console.print("[red]✗ Invalid date format. Use YYYY-MM-DD.[/red]")
+            raise typer.Exit(code=1)
+    else:
+        target_date = datetime.today().date() + timedelta(days=1)
+
+    console.print(f"\n[bold]📅 Planning meals for {target_date.strftime('%A, %b %d, %Y')}[/bold]\n")
+
+    try:
+        day_suggestions = plan_day(user.id, target_date=target_date)
+    except ValueError as e:
+        console.print(f"[red]✗ {e}[/red]")
+        raise typer.Exit(code=1)
+
+    for entry in day_suggestions:
+        meal_type = entry["meal_type"]
+        suggestions = entry["suggestions"]
+
+        emoji_map = {
+            "breakfast": "🌅",
+            "lunch": "🌞",
+            "dinner": "🌙",
+            "brunch": "🥂",
+            "morning_snack": "🍎",
+            "afternoon_snack": "🍪",
+        }
+        emoji = emoji_map.get(meal_type, "🍽️")
+
+        console.print(f"\n[bold]{emoji} {meal_type.replace('_', ' ').title()}[/bold]")
+
+        if not suggestions:
+            console.print("[yellow]  No suggestions available.[/yellow]")
+            continue
+
+        for i, s in enumerate(suggestions, 1):
+            detail_parts = []
+            if s.prep_time_min:
+                detail_parts.append(f"⏱️ {s.prep_time_min}min")
+            if s.difficulty:
+                detail_parts.append(f"📊 {s.difficulty}")
+            if s.cuisine:
+                detail_parts.append(f"🌍 {s.cuisine}")
+            if s.discount_match:
+                detail_parts.append(f"🏷️ {s.discount_match}")
+            detail_str = " | ".join(detail_parts)
+
+            console.print(f"  [cyan]{i}.[/cyan] [bold]{s.title}[/bold]")
+            console.print(f"      [dim]{s.reason}[/dim]")
+            if detail_str:
+                console.print(f"      {detail_str}")
+            if s.ingredient_overlap:
+                console.print(f"      [green]📦 Uses: {', '.join(s.ingredient_overlap[:5])}[/green]")
+
+        console.print("")
+        choice = Prompt.ask(
+            "Pick a suggestion (1-{n}, s=surprise, k=skip)".format(n=len(suggestions)),
+            default="s",
+        )
+
+        if choice.lower() == "k":
+            console.print("[dim]Skipped.[/dim]")
+            continue
+        elif choice.lower() == "s":
+            chosen = pick_suggestion(suggestions)
+        else:
+            try:
+                idx = int(choice)
+                chosen = pick_suggestion(suggestions, idx)
+            except (ValueError, IndexError):
+                console.print("[yellow]Invalid choice, skipping.[/yellow]")
+                continue
+
+        try:
+            result = plan_meal(
+                user.id,
+                target_date=target_date,
+                meal_type=meal_type,
+                recipe_id=chosen.recipe_id,
+            )
+            console.print(f"[green]✓ Planned: {chosen.title} for {meal_type}[/green]")
+        except Exception as e:
+            console.print(f"[red]✗ Error saving plan: {e}[/red]")
+
+    console.print("\n[bold green]✓ Day planning complete![/bold green]")
+
+
+@plan_app.command("suggest")
+def plan_suggest(
+    meal: str = typer.Option(..., "--meal", "-m", help="Meal type to suggest for"),
+    date_str: Optional[str] = typer.Option(None, "--date", "-d", help="Date (YYYY-MM-DD), defaults to tomorrow"),
+    count: int = typer.Option(5, "--count", "-n", help="Number of suggestions"),
+):
+    """Get meal suggestions without committing to a plan."""
+    from datetime import timedelta
+    from mise.meal.suggestions import get_suggestions, MealType
+
+    console = Console()
+    user = _require_user()
+
+    # Validate meal type
+    if meal not in VALID_MEAL_TYPES:
+        console.print(f"[red]✗ Invalid meal type '{meal}'. Valid types: {', '.join(VALID_MEAL_TYPES)}[/red]")
+        raise typer.Exit(code=1)
+
+    if date_str:
+        try:
+            target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            console.print("[red]✗ Invalid date format. Use YYYY-MM-DD.[/red]")
+            raise typer.Exit(code=1)
+    else:
+        target_date = datetime.today().date() + timedelta(days=1)
+
+    console.print(f"\n[bold]💡 Suggestions for {meal.replace('_', ' ').title()} on {target_date.strftime('%A, %b %d')}[/bold]\n")
+
+    try:
+        suggestions = get_suggestions(user.id, target_date, meal, n=count)
+    except Exception as e:
+        console.print(f"[red]✗ Error generating suggestions: {e}[/red]")
+        raise typer.Exit(code=1)
+
+    if not suggestions:
+        console.print("[yellow]No suggestions available. Check your AI provider.[/yellow]")
+        return
+
+    for i, s in enumerate(suggestions, 1):
+        detail_parts = []
+        if s.prep_time_min:
+            detail_parts.append(f"⏱️ {s.prep_time_min}min")
+        if s.difficulty:
+            detail_parts.append(f"📊 {s.difficulty}")
+        if s.cuisine:
+            detail_parts.append(f"🌍 {s.cuisine}")
+        if s.discount_match:
+            detail_parts.append(f"🏷️ {s.discount_match}")
+        detail_str = " | ".join(detail_parts)
+
+        console.print(f"  [cyan]{i}.[/cyan] [bold]{s.title}[/bold]")
+        console.print(f"      [dim]{s.reason}[/dim]")
+        if detail_str:
+            console.print(f"      {detail_str}")
+        if s.ingredient_overlap:
+            console.print(f"      [green]📦 Uses: {', '.join(s.ingredient_overlap[:5])}[/green]")
+        console.print("")
+
+
+@plan_app.command("show")
+def plan_show(
+    start: Optional[str] = typer.Option(None, "--start", "-s", help="Start date (YYYY-MM-DD), defaults to today"),
+    end: Optional[str] = typer.Option(None, "--end", "-e", help="End date (YYYY-MM-DD), defaults to start+6 days"),
+):
+    """Show your current meal plan."""
+    from datetime import timedelta
+    from mise.meal.planner import show_plan
+
+    console = Console()
+    user = _require_user()
+
+    # Parse dates
+    if start:
+        try:
+            start_date = datetime.strptime(start, "%Y-%m-%d").date()
+        except ValueError:
+            console.print("[red]✗ Invalid start date format. Use YYYY-MM-DD.[/red]")
+            raise typer.Exit(code=1)
+    else:
+        start_date = datetime.today().date()
+
+    if end:
+        try:
+            end_date = datetime.strptime(end, "%Y-%m-%d").date()
+        except ValueError:
+            console.print("[red]✗ Invalid end date format. Use YYYY-MM-DD.[/red]")
+            raise typer.Exit(code=1)
+    else:
+        end_date = start_date + timedelta(days=6)
+
+    plans = show_plan(user.id, start_date=start_date, end_date=end_date)
+
+    if not plans:
+        console.print(f"[yellow]No meal plans found for {start_date} to {end_date}.[/yellow]")
+        return
+
+    status_emoji = {
+        "planned": "📋",
+        "shopped": "🛒",
+        "cooked": "👨‍🍳",
+        "skipped": "⏭️",
+    }
+
+    table = Table(title=f"Meal Plan: {start_date} – {end_date}")
+    table.add_column("ID", style="dim", width=4)
+    table.add_column("Date", style="cyan", width=12)
+    table.add_column("Meal", style="white", width=16)
+    table.add_column("Recipe", style="white")
+    table.add_column("Servings", justify="right", width=8)
+    table.add_column("Status", style="green", width=10)
+
+    for p in plans:
+        recipe_display = p.recipe_id or "[dim]—[/dim]"
+        servings_display = str(p.servings) if p.servings else "—"
+        emoji = status_emoji.get(p.status, "")
+        table.add_row(
+            str(p.id),
+            str(p.date),
+            p.meal_type.replace("_", " ").title(),
+            recipe_display,
+            servings_display,
+            f"{emoji} {p.status}",
+        )
+
+    console.print(table)
+
+
+@plan_app.command("clear")
+def plan_clear(
+    start: Optional[str] = typer.Option(None, "--start", "-s", help="Start date (YYYY-MM-DD), defaults to today"),
+    end: Optional[str] = typer.Option(None, "--end", "-e", help="End date (YYYY-MM-DD), defaults to start+6 days"),
+):
+    """Clear (delete) meal plans in a date range."""
+    from datetime import timedelta
+    from mise.meal.planner import clear_plan
+
+    console = Console()
+    user = _require_user()
+
+    if start:
+        try:
+            start_date = datetime.strptime(start, "%Y-%m-%d").date()
+        except ValueError:
+            console.print("[red]✗ Invalid start date format. Use YYYY-MM-DD.[/red]")
+            raise typer.Exit(code=1)
+    else:
+        start_date = datetime.today().date()
+
+    if end:
+        try:
+            end_date = datetime.strptime(end, "%Y-%m-%d").date()
+        except ValueError:
+            console.print("[red]✗ Invalid end date format. Use YYYY-MM-DD.[/red]")
+            raise typer.Exit(code=1)
+    else:
+        end_date = start_date + timedelta(days=6)
+
+    # Confirm
+    if not Confirm.ask(f"Delete all meal plans from {start_date} to {end_date}?"):
+        console.print("[yellow]Cancelled.[/yellow]")
+        return
+
+    count = clear_plan(user.id, start_date=start_date, end_date=end_date)
+    console.print(f"[green]✓ Deleted {count} meal plan(s).[/green]")
+
+
+@plan_app.command("status")
+def plan_status(
+    plan_id: int = typer.Argument(..., help="Meal plan ID"),
+    status: str = typer.Argument(..., help="New status: planned, shopped, cooked, skipped"),
+):
+    """Update the status of a meal plan."""
+    from mise.meal.planner import update_status
+
+    console = Console()
+
+    if status not in ("planned", "shopped", "cooked", "skipped"):
+        console.print(f"[red]✗ Invalid status '{status}'. Valid: planned, shopped, cooked, skipped[/red]")
+        raise typer.Exit(code=1)
+
+    try:
+        result = update_status(plan_id, status)
+        console.print(f"[green]✓ Plan #{result['id']} updated to '{result['status']}'[/green]")
+        console.print(f"  {result['date']} – {result['meal_type']} → {result['recipe_id'] or 'No recipe'}")
+    except ValueError as e:
+        console.print(f"[red]✗ {e}[/red]")
         raise typer.Exit(code=1)
 
 

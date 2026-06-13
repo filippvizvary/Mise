@@ -4,8 +4,8 @@ Handles generating, storing, validating, and expiring verification codes.
 Codes are 8-digit numeric strings, valid for 15 minutes.
 """
 
-import random
-from datetime import datetime, timedelta
+import secrets
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from mise.config import EMAIL_VERIFICATION_REQUIRED
@@ -19,8 +19,8 @@ CODE_EXPIRY_MINUTES = 15
 
 
 def _generate_code() -> str:
-    """Generate a random 8-digit verification code."""
-    return "".join([str(random.randint(0, 9)) for _ in range(CODE_LENGTH)])
+    """Generate a cryptographically secure 8-digit verification code."""
+    return "".join([str(secrets.randbelow(10)) for _ in range(CODE_LENGTH)])
 
 
 def create_verification_code(user_id: int, email: str, username: str) -> str:
@@ -35,12 +35,12 @@ def create_verification_code(user_id: int, email: str, username: str) -> str:
         # Invalidate any previous unused codes for this user
         session.query(EmailVerification).filter(
             EmailVerification.user_id == user_id,
-            EmailVerification.is_used == False,  # noqa: E712
+            EmailVerification.is_used.is_(False)
         ).update({"is_used": True})
 
         # Generate new code
         code = _generate_code()
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expires_at = now + timedelta(minutes=CODE_EXPIRY_MINUTES)
 
         verification = EmailVerification(
@@ -70,13 +70,13 @@ def verify_code(user_id: int, code: str) -> tuple[bool, str]:
     """
     session = SessionLocal()
     try:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         # Find the verification entry
         verification = session.query(EmailVerification).filter(
             EmailVerification.user_id == user_id,
             EmailVerification.code == code,
-            EmailVerification.is_used == False,  # noqa: E712
+            EmailVerification.is_used.is_(False)
         ).first()
 
         if verification is None:

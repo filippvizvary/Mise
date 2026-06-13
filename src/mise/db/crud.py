@@ -1,11 +1,13 @@
 """CRUD operations for Mise database."""
 
+from datetime import date
 from typing import Optional
 
 from sqlalchemy.orm import Session
 
 from mise.db.models import (
     User, UserProfile, UserPreference, Discount,
+    MealPlan, InventoryItem,
 )
 
 
@@ -100,12 +102,21 @@ def get_or_create_profile(session: Session, user_id: int) -> UserProfile:
     return profile
 
 
+# Fields that can be explicitly set to None (e.g., clearing weekly_budget)
+_PROFILE_NULLABLE_FIELDS = {"weekly_budget", "max_cook_time_min"}
+
+
 def update_profile(session: Session, user_id: int, **kwargs) -> UserProfile:
-    """Update profile fields for a user."""
+    """Update profile fields for a user.
+
+    Pass None for fields in _PROFILE_NULLABLE_FIELDS to explicitly clear them.
+    For other fields, None values are ignored.
+    """
     profile = get_or_create_profile(session, user_id)
     for key, value in kwargs.items():
-        if hasattr(profile, key) and value is not None:
-            setattr(profile, key, value)
+        if hasattr(profile, key):
+            if value is not None or key in _PROFILE_NULLABLE_FIELDS:
+                setattr(profile, key, value)
     session.commit()
     return profile
 
@@ -113,7 +124,22 @@ def update_profile(session: Session, user_id: int, **kwargs) -> UserProfile:
 # ─── User Preferences ───────────────────────────────────────────────────
 
 def add_preference(session: Session, user_id: int, pref_type: str, pref_value: str, weight: float = 1.0) -> UserPreference:
-    """Add a preference for a user."""
+    """Add a preference for a user.
+
+    If the exact same (user_id, pref_type, pref_value) already exists,
+    returns the existing preference instead of creating a duplicate.
+    """
+    existing = (
+        session.query(UserPreference)
+        .filter(
+            UserPreference.user_id == user_id,
+            UserPreference.pref_type == pref_type,
+            UserPreference.pref_value == pref_value,
+        )
+        .first()
+    )
+    if existing:
+        return existing
     pref = UserPreference(user_id=user_id, pref_type=pref_type, pref_value=pref_value, weight=weight)
     session.add(pref)
     session.commit()
@@ -140,3 +166,164 @@ def get_preferences(session: Session, user_id: int, pref_type: Optional[str] = N
     if pref_type:
         query = query.filter(UserPreference.pref_type == pref_type)
     return query.all()
+
+
+# ─── Meal Plans ──────────────────────────────────────────────────────────
+
+def create_meal_plan(
+    session: Session,
+    user_id: int,
+    date: date,
+    meal_type: str,
+    recipe_id: Optional[str] = None,
+    servings: Optional[int] = None,
+    status: str = "planned",
+) -> MealPlan:
+    """Create a new meal plan entry."""
+    plan = MealPlan(
+        user_id=user_id,
+        date=date,
+        meal_type=meal_type,
+        recipe_id=recipe_id,
+        servings=servings,
+        status=status,
+    )
+    session.add(plan)
+    session.commit()
+    return plan
+
+
+def get_meal_plans(
+    session: Session,
+    user_id: int,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+) -> list[MealPlan]:
+    """Get meal plans for a user, optionally filtered by date range."""
+    query = session.query(MealPlan).filter(MealPlan.user_id == user_id)
+    if start_date is not None:
+        query = query.filter(MealPlan.date >= start_date)
+    if end_date is not None:
+        query = query.filter(MealPlan.date <= end_date)
+    return query.order_by(MealPlan.date, MealPlan.meal_type).all()
+
+
+def get_meal_plan_by_slot(
+    session: Session,
+    user_id: int,
+    date: date,
+    meal_type: str,
+) -> Optional[MealPlan]:
+    """Get a meal plan for a specific user/date/meal_type slot."""
+    return (
+        session.query(MealPlan)
+        .filter(
+            MealPlan.user_id == user_id,
+            MealPlan.date == date,
+            MealPlan.meal_type == meal_type,
+        )
+        .first()
+    )
+
+
+def update_meal_plan_status(session: Session, plan_id: int, status: str) -> MealPlan:
+    """Update the status of a meal plan."""
+    plan = session.query(MealPlan).filter(MealPlan.id == plan_id).first()
+    if plan is None:
+        raise ValueError(f"MealPlan with id {plan_id} not found")
+    plan.status = status
+    session.commit()
+    return plan
+
+
+def delete_meal_plan(session: Session, plan_id: int) -> bool:
+    """Delete a single meal plan by ID. Returns True if found and deleted."""
+    plan = session.query(MealPlan).filter(MealPlan.id == plan_id).first()
+    if plan:
+        session.delete(plan)
+        session.commit()
+        return True
+    return False
+
+
+def clear_meal_plans(
+    session: Session,
+    user_id: int,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+) -> int:
+    """Delete all meal plans for a user in a date range. Returns count deleted."""
+    query = session.query(MealPlan).filter(MealPlan.user_id == user_id)
+    if start_date is not None:
+        query = query.filter(MealPlan.date >= start_date)
+    if end_date is not None:
+        query = query.filter(MealPlan.date <= end_date)
+    count = query.count()
+    query.delete(synchronize_session=False)
+    session.commit()
+    return count
+
+
+# ─── Inventory ───────────────────────────────────────────────────────────
+
+def get_user_inventory(session: Session, user_id: int) -> list[InventoryItem]:
+    """Get all inventory items for a user."""
+    return (
+        session.query(InventoryItem)
+        .filter(InventoryItem.user_id == user_id)
+        .order_by(InventoryItem.category, InventoryItem.name)
+        .all()
+    )
+
+
+# ─── Discounts (filtered by stores) ─────────────────────────────────────
+
+def get_discounts_for_stores(
+    session: Session,
+    stores: list[str],
+) -> list[Discount]:
+    """Get discounts available at the specified stores."""
+    return (
+        session.query(Discount)
+        .filter(Discount.store.in_(stores))
+        .order_by(Discount.category, Discount.product)
+        .all()
+    )
+
+
+# ─── Feedback ────────────────────────────────────────────────────────────
+
+def get_user_feedback(
+    session: Session,
+    user_id: int,
+    limit: int = 20,
+) -> list:
+    """Get recent feedback for a user. Returns Feedback ORM objects."""
+    from mise.db.models import Feedback
+    return (
+        session.query(Feedback)
+        .filter(Feedback.user_id == user_id)
+        .order_by(Feedback.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+# ─── Shopping List Items ─────────────────────────────────────────────────
+
+def get_user_shopping_items(
+    session: Session,
+    user_id: int,
+) -> list:
+    """Get all unchecked shopping list items for a user. Returns ShoppingItem ORM objects."""
+    from mise.db.models import ShoppingList, ShoppingItem
+    return (
+        session.query(ShoppingItem)
+        .join(ShoppingList, ShoppingItem.list_id == ShoppingList.id)
+        .filter(
+            ShoppingList.user_id == user_id,
+            ShoppingItem.checked.is_(False),
+        )
+        .order_by(ShoppingItem.ingredient_name)
+        .all()
+    )
