@@ -1,0 +1,16 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: mise-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mise
+      POSTGRES_PASSWORD: mise
+      POSTGRES_DB: mise
+    ports:
+      - "5432:5432"
+    volumes:
+      - mise-pgdata:/var/lib/postgresql/data
+
+volumes:
+  mise-pgdata:

@@ -16,6 +16,16 @@ __pycache__/
 .vscode/
 .idea/
 
+# Environment
+.env
+
+# Auth state
+.mise/
+
+# Alembic bytecode
+alembic/__pycache__/
+alembic/versions/__pycache__/
+
 # OS
 .DS_Store
 Thumbs.db

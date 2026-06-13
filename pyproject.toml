@@ -14,10 +14,15 @@ dependencies = [
     "rapidfuzz>=3.14.5",
     "rich>=15.0.0",
     "typer>=0.26.7",
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "psycopg2-binary>=2.9",
+    "bcrypt>=4.0",
+    "python-dotenv>=1.0",
 ]
 
 [project.scripts]
-mise = "mise.cli:app"
+mise = "mise.cli.main:app"
 
 [build-system]
 requires = ["setuptools"]
